@@ -7,6 +7,7 @@
   "contributes": {
     "panels": [{ "id": "sentry.trace", "title": "Sentry trace", "surface": "thread.sidePanel" }],
     "settings": [{ "id": "sentry.dsn", "title": "Sentry DSN", "scope": "server", "field": { "kind": "text", "secret": true, "placeholder": "https://public@example.ingest.sentry.io/1" } }],
+    "settingsPanels": [{ "id": "sentry.settings", "title": "Sentry", "description": "Configure telemetry destinations.", "settingIds": ["sentry.dsn"] }],
     "hooks": ["session.started", "turn.started", "turn.settled", "runtime.error"]
   },
   "capabilities": [
