@@ -3,7 +3,7 @@
   "id": "com.t3code.sentry",
   "displayName": "Sentry agent monitoring",
   "version": "0.1.0",
-  "runtime": { "kind": "managed-app", "command": ["sentry-t3-plugin"], "restart": "on-failure" },
+  "runtime": { "kind": "managed-app", "command":["bun","src/stdio.ts"], "restart": "on-failure" },
   "contributes": {
     "panels": [{ "id": "sentry.trace", "title": "Sentry trace", "surface": "thread.sidePanel" }],
     "settings": [{ "id": "sentry.dsn", "title": "Sentry DSN", "scope": "server", "field": { "kind": "text", "secret": true, "placeholder": "https://public@example.ingest.sentry.io/1" } }],
