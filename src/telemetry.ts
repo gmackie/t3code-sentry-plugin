@@ -2,7 +2,8 @@ import type { AgentSpan, MonitoringSummary } from "./types.ts";
 
 type RawSpan = { trace_id?: unknown; span_id?: unknown; op?: unknown; status?: unknown; start_timestamp?: unknown; timestamp?: unknown; tags?: unknown };
 
-export function normalizeAgentTrace(traceId: string, input: unknown): MonitoringSummary {
+// A truncated trace is never reported "ok": an unread span may have failed.
+export function normalizeAgentTrace(traceId: string, input: unknown, options: { truncated?: boolean } = {}): MonitoringSummary {
   const rows = Array.isArray(input) ? input : [];
   const spans = rows.flatMap((row): AgentSpan[] => {
     if (!row || typeof row !== "object") return [];
@@ -26,9 +27,10 @@ export function normalizeAgentTrace(traceId: string, input: unknown): Monitoring
   return {
     providerId: "sentry",
     traceId,
-    status: spans.length === 0 ? "partial" : errorCount > 0 ? "error" : "ok",
+    status: errorCount > 0 ? "error" : spans.length === 0 || options.truncated ? "partial" : "ok",
     operationCount: spans.length,
     errorCount,
+    ...(options.truncated ? { truncated: true } : {}),
     spans,
   };
 }

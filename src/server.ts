@@ -3,7 +3,7 @@ import { RESOURCE_MIME_TYPE, registerAppResource, registerAppTool } from "@model
 import { z } from "zod";
 
 import { loadConfig } from "./config.ts";
-import { createSentryClient, type Fetch, type RawSpan } from "./sentryClient.ts";
+import { createSentryClient, searchAllSpans, type Fetch, type RawSpan } from "./sentryClient.ts";
 import { normalizeAgentTrace } from "./telemetry.ts";
 import { VIEWS, viewHtml, type ViewName } from "./views/html.ts";
 import type { TracesData } from "./views/render.ts";
@@ -25,6 +25,11 @@ const threadId = z
   .string()
   .regex(/^[A-Za-z0-9_.:-]{1,128}$/, "threadId may only contain letters, digits and _ . : -")
   .describe("T3 thread id, matched against the t3_thread_id span tag");
+
+// Discover's per_page maximum, and how many pages one tool call may read.
+// Past that the result is marked truncated rather than presented as complete.
+export const PAGE_SIZE = 100;
+export const MAX_PAGES = 5;
 
 export function createSentryMcpServer(options: SentryServerOptions = {}): McpServer {
   const server = new McpServer(SERVER_INFO, {
@@ -57,11 +62,14 @@ export function createSentryMcpServer(options: SentryServerOptions = {}): McpSer
     },
     async ({ threadId: id, statsPeriod }) =>
       result(async () => {
-        const spans = await client().searchSpans({ query: `t3_thread_id:${id}`, statsPeriod: statsPeriod ?? "14d", limit: 100 });
-        const traces = groupByTrace(spans).map(([trace, rows]) => normalizeAgentTrace(trace, rows));
-        const data: TracesData = { mode: "thread", threadId: id, traces, refreshedAt: new Date().toISOString() };
-        const lines = traces.map((trace) => `- ${trace.traceId} [${trace.status}] ${trace.operationCount} operations, ${trace.errorCount} errors`);
-        return { data, text: traces.length ? `${traces.length} Sentry traces for thread ${id}:\n${lines.join("\n")}` : `No Sentry spans tagged t3_thread_id=${id} in the last ${statsPeriod ?? "14d"}.` };
+        const { spans, truncated } = await searchAllSpans(client(), { query: `t3_thread_id:${id}`, statsPeriod: statsPeriod ?? "14d", limit: PAGE_SIZE, maxPages: MAX_PAGES });
+        // Once the read stops early, any trace may have unread spans, so none
+        // of them is reported complete.
+        const traces = groupByTrace(spans).map(([trace, rows]) => normalizeAgentTrace(trace, rows, { truncated }));
+        const data: TracesData = { mode: "thread", threadId: id, traces, refreshedAt: new Date().toISOString(), ...(truncated ? { truncated: true, spansRead: spans.length } : {}) };
+        const lines = traces.map((trace) => `- ${trace.traceId} [${trace.status}] ${trace.operationCount}${truncated ? "+" : ""} operations, ${trace.errorCount}${truncated ? "+" : ""} errors`);
+        const note = truncated ? `\nShowing only the newest ${spans.length} spans: Sentry has more, so older traces may be missing and counts are lower bounds. Use sentry_trace for one trace's full error count.` : "";
+        return { data, text: traces.length ? `${traces.length} Sentry traces for thread ${id}:\n${lines.join("\n")}${note}` : `No Sentry spans tagged t3_thread_id=${id} in the last ${statsPeriod ?? "14d"}.` };
       }),
   );
 
@@ -78,12 +86,30 @@ export function createSentryMcpServer(options: SentryServerOptions = {}): McpSer
     async ({ traceId: id }) =>
       result(async () => {
         const trace = id.toLowerCase();
-        const spans = await client().searchSpans({ query: `trace:${trace}`, statsPeriod: "30d", limit: 100 });
-        const summary = normalizeAgentTrace(trace, spans);
-        const data: TracesData = { mode: "trace", traces: [summary], refreshedAt: new Date().toISOString() };
+        const sentry = client();
+        const all = await searchAllSpans(sentry, { query: `trace:${trace}`, statsPeriod: "30d", limit: PAGE_SIZE, maxPages: MAX_PAGES });
+        let spans = all.spans;
+        let errorsComplete = !all.truncated;
+        if (all.truncated) {
+          // The trace is too large to read whole; read its non-ok spans
+          // separately so failures past the read window are still counted.
+          const failed = await searchAllSpans(sentry, { query: `trace:${trace} !span.status:ok`, statsPeriod: "30d", limit: PAGE_SIZE, maxPages: MAX_PAGES });
+          const seen = new Set(spans.map((span) => span.span_id));
+          spans = [...spans, ...failed.spans.filter((span) => !seen.has(span.span_id))];
+          errorsComplete = !failed.truncated;
+        }
+        const summary = normalizeAgentTrace(trace, spans, { truncated: all.truncated });
+        const data: TracesData = { mode: "trace", traces: [summary], refreshedAt: new Date().toISOString(), ...(all.truncated ? { truncated: true, spansRead: spans.length, errorsComplete } : {}) };
         if (summary.operationCount === 0) return { data, text: `Sentry has no spans for trace ${trace} in the last 30d.` };
-        const lines = summary.spans.map((span) => `- ${span.operation} [${span.status}]${span.durationMs !== undefined ? ` ${span.durationMs}ms` : ""}${span.runId ? ` run ${span.runId}` : ""}`);
-        return { data, text: `Trace ${trace} [${summary.status}]: ${summary.operationCount} operations, ${summary.errorCount} errors.\n${lines.join("\n")}` };
+        // The model text lists failures first and at most PAGE_SIZE operations;
+        // structuredContent carries every span read.
+        const ordered = [...summary.spans.filter((span) => span.status === "error"), ...summary.spans.filter((span) => span.status !== "error")];
+        const lines = ordered.slice(0, PAGE_SIZE).map((span) => `- ${span.operation} [${span.status}]${span.durationMs !== undefined ? ` ${span.durationMs}ms` : ""}${span.runId ? ` run ${span.runId}` : ""}`);
+        if (ordered.length > PAGE_SIZE) lines.push(`- ... ${ordered.length - PAGE_SIZE} more operations in the trace view`);
+        const counts = all.truncated
+          ? `${summary.operationCount}+ operations (the trace has more spans than were read), ${summary.errorCount}${errorsComplete ? "" : "+"} errors${errorsComplete ? " across the whole trace" : ""}`
+          : `${summary.operationCount} operations, ${summary.errorCount} errors`;
+        return { data, text: `Trace ${trace} [${summary.status}]: ${counts}.\n${lines.join("\n")}` };
       }),
   );
 

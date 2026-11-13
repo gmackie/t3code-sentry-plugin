@@ -8,7 +8,24 @@ export type TracesData = {
   threadId?: string;
   traces: readonly MonitoringSummary[];
   refreshedAt: string;
+  /** Sentry had more spans than one call reads; counts are lower bounds. */
+  truncated?: boolean;
+  spansRead?: number;
+  /** trace mode, truncated: whether the separate error query read every failed span. */
+  errorsComplete?: boolean;
 };
+
+function truncationNote(data: TracesData): string {
+  if (!data.truncated) return "";
+  const read = data.spansRead !== undefined ? `the newest ${data.spansRead} spans` : "part of the spans";
+  const detail =
+    data.mode === "thread"
+      ? "Older traces may be missing and operation and error counts are lower bounds."
+      : data.errorsComplete
+        ? "The operation count is a lower bound; the error count covers the whole trace."
+        : "Operation and error counts are lower bounds.";
+  return `<p class="warning" role="status">Showing ${esc(read)}; Sentry has more. ${esc(detail)}</p>`;
+}
 
 export function esc(value: unknown): string {
   return String(value ?? "")
@@ -55,7 +72,7 @@ export function renderTraces(data: TracesData, options: { back?: boolean; error?
           return `<li class="row">
   <div class="row-main">
     <div class="row-title mono">${esc(trace.traceId)}</div>
-    <div class="row-meta">${pill(trace.status)}<span>${esc(trace.operationCount)} operations</span>${trace.errorCount ? `<span class="error">${esc(trace.errorCount)} errors</span>` : ""}${longest ? `<span>longest ${esc(duration(longest))}</span>` : ""}${runs.length ? `<span>run ${runs.map(esc).join(", ")}</span>` : ""}</div>
+    <div class="row-meta">${pill(trace.status)}<span>${esc(trace.operationCount)}${trace.truncated ? "+" : ""} operations</span>${trace.errorCount ? `<span class="error">${esc(trace.errorCount)}${trace.truncated ? "+" : ""} errors</span>` : ""}${longest ? `<span>longest ${esc(duration(longest))}</span>` : ""}${runs.length ? `<span>run ${runs.map(esc).join(", ")}</span>` : ""}</div>
   </div>
   <button type="button" data-action="open-trace" data-trace-id="${esc(trace.traceId)}">Open</button>
 </li>`;
@@ -64,6 +81,7 @@ export function renderTraces(data: TracesData, options: { back?: boolean; error?
     : `<li class="empty">No Sentry spans are tagged with this thread yet.</li>`;
   return `${header("Sentry traces", data, false)}
 ${data.threadId ? `<p class="subject">Thread <span class="mono">${esc(data.threadId)}</span></p>` : ""}
+${truncationNote(data)}
 ${error}
 <section aria-label="Traces"><h2>Traces <span class="count">${data.traces.length}</span></h2><ul>${rows}</ul></section>`;
 }
@@ -84,7 +102,8 @@ function renderTrace(data: TracesData, back: boolean, error: string): string {
         .join("\n")
     : `<li class="empty">Sentry has no spans for this trace. It may be outside the 30-day window or not ingested yet.</li>`;
   return `${header("Sentry trace", data, back)}
-<p class="subject">${pill(trace.status)} <span class="mono">${esc(trace.traceId)}</span> <span>${esc(trace.operationCount)} operations · ${esc(trace.errorCount)} errors</span></p>
+<p class="subject">${pill(trace.status)} <span class="mono">${esc(trace.traceId)}</span> <span>${esc(trace.operationCount)}${trace.truncated ? "+" : ""} operations · ${esc(trace.errorCount)}${trace.truncated && !data.errorsComplete ? "+" : ""} errors</span></p>
+${truncationNote(data)}
 ${error}
 <section aria-label="Operations"><h2>Operations</h2><ul>${spans}</ul></section>`;
 }
@@ -109,5 +128,5 @@ ul { list-style: none; margin: 0; padding: 0; }
 button { font: inherit; color: var(--fg); background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 3px 10px; cursor: pointer; }
 button:hover:not(:disabled) { border-color: var(--accent); } button:disabled { opacity: .5; cursor: default; }
 .subject { margin: 6px 0 0; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; color: var(--muted); }
-.error { color: var(--neg); }
+.error { color: var(--neg); } .warning { color: var(--warn); margin: 8px 0 0; }
 `;

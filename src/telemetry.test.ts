@@ -25,4 +25,10 @@ describe("Sentry monitoring plugin", () => {
     expect(normalizeAgentTrace("trace-2", [{ span_id: "span-2", op: "tool", status: "error", tags: { token: "secret" } }, null])).toMatchObject({ status: "error", operationCount: 1, errorCount: 1 });
     expect(normalizeAgentTrace("trace-3", []).status).toBe("partial");
   });
+
+  it("never calls a truncated trace ok", () => {
+    const span = { span_id: "span-1", op: "tool", status: "ok", tags: {} };
+    expect(normalizeAgentTrace("trace-4", [span], { truncated: true })).toMatchObject({ status: "partial", truncated: true });
+    expect(normalizeAgentTrace("trace-4", [span, { ...span, span_id: "span-2", status: "error" }], { truncated: true }).status).toBe("error");
+  });
 });

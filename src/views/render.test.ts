@@ -34,4 +34,16 @@ describe("trace view renderer", () => {
     expect(html).toContain('data-action="back"');
     expect(renderTraces({ mode: "trace", traces: [normalizeAgentTrace("t", [])], refreshedAt: "" })).toContain("outside the 30-day window");
   });
+
+  it("says when Sentry had more spans than were read", () => {
+    const partial = normalizeAgentTrace("trace-2", [{ span_id: "s1", op: "tool", status: "ok", tags: {} }], { truncated: true });
+    const list = renderTraces({ mode: "thread", threadId: "t1", traces: [partial], refreshedAt: "", truncated: true, spansRead: 500 });
+    expect(list).toContain("Showing the newest 500 spans; Sentry has more.");
+    expect(list).toContain("1+ operations");
+    expect(list).toContain("pill-warning");
+    const detail = renderTraces({ mode: "trace", traces: [partial], refreshedAt: "", truncated: true, spansRead: 500, errorsComplete: true });
+    expect(detail).toContain("1+ operations · 0 errors");
+    expect(detail).toContain("the error count covers the whole trace");
+    expect(renderTraces({ mode: "thread", traces: [trace], refreshedAt: "" })).not.toContain("Sentry has more");
+  });
 });

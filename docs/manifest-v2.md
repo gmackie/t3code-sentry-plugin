@@ -22,7 +22,7 @@ There is no `runtime`, `hooks`, `settings`, `settingsPanels`, or capability requ
 | `sentry_thread_traces` | `["model", "app"]` | Spans tagged `t3_thread_id` in the last 14d (or `statsPeriod`), grouped into trace summaries, newest first. Renders `ui://sentry/trace.html`. |
 | `sentry_trace` | `["model", "app"]` | One trace's operations (status, duration, thread/run ids) from the last 30d. Renders `ui://sentry/trace.html`. |
 
-Both are read-only and query Sentry's Discover API (`GET /api/0/organizations/{org}/events/?dataset=spans`). The request names its columns, so only the span id, op, status, timestamps, trace id and the two T3 correlation tags leave Sentry. `normalizeAgentTrace` (`src/telemetry.ts`, the v1 domain module) turns them into the summaries. Calls time out after 15s. 5xx responses become "Sentry is temporarily unavailable", and no error includes a URL or a response body.
+Both are read-only and query Sentry's Discover API (`GET /api/0/organizations/{org}/events/?dataset=spans`). The request names its columns, so only the span id, op, status, timestamps, trace id and the two T3 correlation tags leave Sentry. `normalizeAgentTrace` (`src/telemetry.ts`, the v1 domain module) turns them into the summaries. Calls time out after 15s. Each tool follows Sentry's `Link` cursor for at most 5 pages of 100 spans. When Sentry still has more, the result carries `truncated: true`, counts are shown as lower bounds (`100+`), and no trace is reported `ok`. `sentry_trace` then runs a second `!span.status:ok` query so its error count still covers the whole trace when that query fits in the same limit (`errorsComplete`). 5xx responses become "Sentry is temporarily unavailable", and no error includes a URL or a response body.
 
 ## v1 → v2 mapping
 

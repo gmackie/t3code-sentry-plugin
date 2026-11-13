@@ -19,10 +19,40 @@ export type RawSpan = {
   tags: { t3_thread_id?: string; t3_run_id?: string };
 };
 
-export type SentrySpanClient = {
-  /** Spans matching a Discover search query, newest first. */
-  searchSpans(input: { query: string; statsPeriod: string; limit: number }): Promise<RawSpan[]>;
+export type SpanPage = {
+  spans: RawSpan[];
+  /** True when Sentry has more rows after this page. */
+  hasMore: boolean;
+  /** Cursor for the next page, from Sentry's Link header. */
+  nextCursor?: string;
 };
+
+export type SentrySpanClient = {
+  /** One page of spans matching a Discover search query, newest first. */
+  searchSpans(input: { query: string; statsPeriod: string; limit: number; cursor?: string }): Promise<SpanPage>;
+};
+
+export type SpanSearch = { spans: RawSpan[]; truncated: boolean };
+
+/**
+ * Follows Sentry's cursor for up to maxPages pages. `truncated` is true when
+ * Sentry still had rows left, so callers never present the result as complete.
+ */
+export async function searchAllSpans(
+  client: SentrySpanClient,
+  input: { query: string; statsPeriod: string; limit: number; maxPages: number },
+): Promise<SpanSearch> {
+  const spans: RawSpan[] = [];
+  let cursor: string | undefined;
+  for (let page = 0; page < input.maxPages; page++) {
+    const result = await client.searchSpans({ query: input.query, statsPeriod: input.statsPeriod, limit: input.limit, ...(cursor ? { cursor } : {}) });
+    spans.push(...result.spans);
+    if (!result.hasMore) return { spans, truncated: false };
+    if (!result.nextCursor) return { spans, truncated: true };
+    cursor = result.nextCursor;
+  }
+  return { spans, truncated: true };
+}
 
 // Only these columns are requested, so arbitrary tags and payloads never leave
 // Sentry. t3_thread_id/t3_run_id are the correlation tags T3 agent spans carry.
@@ -37,8 +67,9 @@ export function createSentryClient(config: SentryConfig, options: { fetch?: Fetc
   const timeoutMs = options.timeoutMs ?? TIMEOUT_MS;
 
   return {
-    async searchSpans({ query, statsPeriod, limit }) {
+    async searchSpans({ query, statsPeriod, limit, cursor }) {
       const params = new URLSearchParams({ dataset: "spans", query, statsPeriod, per_page: String(limit), sort: "-timestamp" });
+      if (cursor) params.set("cursor", cursor);
       for (const field of FIELDS) params.append("field", field);
       const url = `${config.baseUrl}/api/0/organizations/${encodeURIComponent(config.org)}/events/?${params}`;
       let response: Response;
@@ -57,9 +88,24 @@ export function createSentryClient(config: SentryConfig, options: { fetch?: Fetc
       if (!response.ok) throw await apiError(response, config.org);
       const body = (await response.json().catch(() => null)) as { data?: unknown } | null;
       if (!body || !Array.isArray(body.data)) throw new SentryApiError(response.status, "Sentry returned an unexpected response");
-      return body.data.flatMap((row) => toRawSpan(row));
+      const next = nextPage(response.headers.get("link"));
+      // Without a Link header, a full page is the only hint that more rows exist.
+      const hasMore = next ? next.results : body.data.length >= limit;
+      return { spans: body.data.flatMap((row) => toRawSpan(row)), hasMore, ...(hasMore && next?.cursor ? { nextCursor: next.cursor } : {}) };
     },
   };
+}
+
+// Sentry paginates with RFC 5988 Link headers:
+// <url>; rel="next"; results="true"; cursor="0:100:0"
+function nextPage(header: string | null): { results: boolean; cursor?: string } | undefined {
+  if (!header) return undefined;
+  for (const part of header.split(/,\s*(?=<)/)) {
+    if (!/;\s*rel="next"/.test(part)) continue;
+    const cursor = /;\s*cursor="([^"]*)"/.exec(part)?.[1];
+    return { results: /;\s*results="true"/.test(part), ...(cursor ? { cursor } : {}) };
+  }
+  return undefined;
 }
 
 // Errors stay short: no URLs and no response bodies beyond Sentry's own

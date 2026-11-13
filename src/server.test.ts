@@ -2,7 +2,13 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { RESOURCE_MIME_TYPE } from "@modelcontextprotocol/ext-apps/server";
 
 import type { TracesData } from "./views/render.ts";
+import { MAX_PAGES, PAGE_SIZE } from "./server.ts";
 import { connectedClient, fakeSentry, TRACE_A, TRACE_B, type FakeSentry } from "./testing.ts";
+
+// A full page of ok spans for one trace, as Sentry returns them.
+const okRows = (trace: string, page: number) =>
+  Array.from({ length: PAGE_SIZE }, (_, index) => ({ id: `p${page}-${index}`, trace, "span.op": "gen_ai.execute_tool", "span.status": "ok", "precise.start_ts": 1, "precise.finish_ts": 2, timestamp: "2026-11-01T10:00:00Z", t3_thread_id: "thread-1", t3_run_id: "run-1" }));
+const link = (cursor: string, results: boolean) => `<https://sentry.example/x>; rel="previous"; results="false"; cursor="0:0:1", <https://sentry.example/x>; rel="next"; results="${results}"; cursor="${cursor}"`;
 
 type Structured<T> = { structuredContent?: T; isError?: boolean; content: { type: string; text?: string }[] };
 type TestClient = Awaited<ReturnType<typeof connectedClient>>["client"];
@@ -132,5 +138,60 @@ describe("Sentry MCP server", () => {
     const { client } = await connectedClient({ env: { ...env(), SENTRY_URL: "http://127.0.0.1:1" } });
     const result = await call(client, "sentry_trace", { traceId: TRACE_A });
     expect(result).toMatchObject({ isError: true, content: [{ text: "Could not reach Sentry; check SENTRY_URL and the network" }] });
+  });
+
+  it("follows Sentry's cursor and reports a complete trace when the pages run out", async () => {
+    const { client } = await connectedClient({ env: env() });
+    sentry.respond((url) => {
+      const page = Number(url.searchParams.get("cursor")?.split(":")[1] ?? 0) / PAGE_SIZE;
+      const last = page === 1;
+      return Response.json({ data: last ? okRows(TRACE_A, page).slice(0, 7) : okRows(TRACE_A, page) }, { headers: { link: link(`0:${(page + 1) * PAGE_SIZE}:0`, !last) } });
+    });
+    const result = await call(client, "sentry_trace", { traceId: TRACE_A });
+    const [trace] = result.structuredContent!.traces;
+    expect(trace).toMatchObject({ status: "ok", operationCount: PAGE_SIZE + 7, errorCount: 0 });
+    expect(trace!.truncated).toBeUndefined();
+    expect(result.structuredContent!.truncated).toBeUndefined();
+    expect(sentry.requests.map((url) => url.searchParams.get("cursor"))).toEqual([null, `0:${PAGE_SIZE}:0`]);
+    expect(result.content[0]?.text).toContain(`[ok]: ${PAGE_SIZE + 7} operations, 0 errors.`);
+  });
+
+  it("never reports a trace larger than the read window as ok, and still counts its errors", async () => {
+    const { client } = await connectedClient({ env: env() });
+    // Full pages with no Link header: a full page is the only sign of more rows.
+    sentry.respond((url) => {
+      const query = url.searchParams.get("query")!;
+      if (query === `trace:${TRACE_A} !span.status:ok`) {
+        return Response.json({ data: [{ id: "late-failure", trace: TRACE_A, "span.op": "gen_ai.execute_tool", "span.status": "internal_error", "precise.start_ts": 0, "precise.finish_ts": 0.5, timestamp: "2026-11-01T09:00:00Z", t3_thread_id: "thread-1" }] });
+      }
+      return Response.json({ data: okRows(TRACE_A, 0) });
+    });
+    const result = await call(client, "sentry_trace", { traceId: TRACE_A });
+    const data = result.structuredContent!;
+    expect(data).toMatchObject({ truncated: true, errorsComplete: true });
+    expect(data.traces[0]).toMatchObject({ status: "error", operationCount: PAGE_SIZE + 1, errorCount: 1, truncated: true });
+    expect(sentry.requests.map((url) => url.searchParams.get("query"))).toEqual([`trace:${TRACE_A}`, `trace:${TRACE_A} !span.status:ok`]);
+    expect(result.content[0]?.text).toContain(`[error]: ${PAGE_SIZE + 1}+ operations (the trace has more spans than were read), 1 errors across the whole trace.`);
+
+    sentry.respond((url) => Response.json({ data: url.searchParams.get("query")!.includes("!span.status:ok") ? [] : okRows(TRACE_A, 0) }));
+    const quiet = await call(client, "sentry_trace", { traceId: TRACE_A });
+    expect(quiet.structuredContent!.traces[0]).toMatchObject({ status: "partial", errorCount: 0, truncated: true });
+    expect(quiet.content[0]?.text).toStartWith(`Trace ${TRACE_A} [partial]: ${PAGE_SIZE}+ operations`);
+    expect(quiet.content[0]?.text.split("\n")).toHaveLength(1 + PAGE_SIZE);
+  });
+
+  it("stops after a bounded number of pages and marks a thread's traces incomplete", async () => {
+    const { client } = await connectedClient({ env: env() });
+    sentry.respond((url) => {
+      const page = Number(url.searchParams.get("cursor")?.split(":")[1] ?? 0) / PAGE_SIZE;
+      return Response.json({ data: okRows(page % 2 ? TRACE_B : TRACE_A, page) }, { headers: { link: link(`0:${(page + 1) * PAGE_SIZE}:0`, true) } });
+    });
+    const result = await call(client, "sentry_thread_traces", { threadId: "thread-1" });
+    const data = result.structuredContent!;
+    expect(sentry.requests).toHaveLength(MAX_PAGES);
+    expect(data).toMatchObject({ truncated: true, spansRead: PAGE_SIZE * MAX_PAGES });
+    for (const trace of data.traces) expect(trace).toMatchObject({ status: "partial", truncated: true });
+    expect(result.content[0]?.text).toContain(`Showing only the newest ${PAGE_SIZE * MAX_PAGES} spans`);
+    expect(result.content[0]?.text).not.toContain("[ok]");
   });
 });
