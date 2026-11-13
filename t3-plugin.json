@@ -1,19 +1,55 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "id": "com.t3code.sentry",
   "displayName": "Sentry agent monitoring",
-  "version": "0.1.0",
-  "runtime": { "kind": "managed-app", "command":["bun","src/stdio.ts"], "restart": "on-failure" },
-  "contributes": {
-    "panels": [{ "id": "sentry.trace", "title": "Sentry trace", "surface": "thread.sidePanel" }],
-    "settings": [{ "id": "sentry.dsn", "title": "Sentry DSN", "scope": "server", "field": { "kind": "text", "secret": true, "placeholder": "https://public@example.ingest.sentry.io/1" } }],
-    "settingsPanels": [{ "id": "sentry.settings", "title": "Sentry", "description": "Configure telemetry destinations.", "settingIds": ["sentry.dsn"] }],
-    "hooks": ["session.started", "turn.started", "turn.settled", "runtime.error"]
+  "version": "0.2.0",
+  "description": "Read agent-monitoring traces from Sentry: the traces a T3 thread produced and each trace's operations, durations and errors.",
+  "mcpServer": {
+    "name": "sentry",
+    "transport": {
+      "type": "stdio",
+      "command": "bun",
+      "args": [
+        "${pluginRoot}/src/mcp.ts"
+      ],
+      "env": [
+        {
+          "name": "SENTRY_URL",
+          "value": "https://sentry.io",
+          "title": "Sentry URL",
+          "description": "https://sentry.io, a regional host such as https://us.sentry.io, or your self-hosted Sentry."
+        },
+        {
+          "name": "SENTRY_ORG",
+          "value": "",
+          "title": "Sentry organization slug"
+        },
+        {
+          "name": "SENTRY_AUTH_TOKEN",
+          "value": "",
+          "sensitive": true,
+          "title": "Sentry auth token",
+          "description": "An organization or user auth token with org:read and event:read."
+        }
+      ]
+    }
   },
-  "capabilities": [
-    { "kind": "events.read", "eventTypes": ["session.started", "turn.started", "turn.settled", "runtime.error"] },
-    { "kind": "secrets.read", "names": ["SENTRY_DSN"] },
-    { "kind": "network.connect", "hosts": ["sentry.io"] },
-    { "kind": "ui.embed", "surfaces": ["thread.sidePanel"] }
-  ]
+  "contributes": {
+    "panels": [
+      {
+        "id": "sentry-trace",
+        "title": "Sentry trace",
+        "scope": "thread",
+        "resourceUri": "ui://sentry/trace.html"
+      }
+    ],
+    "commands": [
+      {
+        "id": "sentry-open-trace",
+        "title": "Sentry: Open traces for this thread",
+        "panel": "sentry-trace"
+      }
+    ]
+  },
+  "t3Tools": []
 }
