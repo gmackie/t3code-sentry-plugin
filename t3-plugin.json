@@ -2,54 +2,25 @@
   "schemaVersion": 2,
   "id": "com.t3code.sentry",
   "displayName": "Sentry agent monitoring",
-  "version": "0.2.0",
-  "description": "Read agent-monitoring traces from Sentry: the traces a T3 thread produced and each trace's operations, durations and errors.",
+  "version": "1.0.1",
+  "description": "Inspect Sentry issues, events, and traces through Sentry’s hosted OAuth MCP server.",
   "mcpServer": {
     "name": "sentry",
     "transport": {
-      "type": "stdio",
-      "command": "bun",
-      "args": [
-        "${pluginRoot}/src/mcp.ts"
-      ],
-      "env": [
-        {
-          "name": "SENTRY_URL",
-          "value": "https://sentry.io",
-          "title": "Sentry URL",
-          "description": "https://sentry.io, a regional host such as https://us.sentry.io, or your self-hosted Sentry."
-        },
-        {
-          "name": "SENTRY_ORG",
-          "value": "",
-          "title": "Sentry organization slug"
-        },
-        {
-          "name": "SENTRY_AUTH_TOKEN",
-          "value": "",
-          "sensitive": true,
-          "title": "Sentry auth token",
-          "description": "An organization or user auth token with org:read and event:read."
-        }
-      ]
+      "type": "http",
+      "url": "https://mcp.sentry.dev/mcp",
+      "headers": [],
+      "auth": {
+        "type": "oauth",
+        "scopes": [
+          "org:read"
+        ]
+      }
     }
   },
   "contributes": {
-    "panels": [
-      {
-        "id": "sentry-trace",
-        "title": "Sentry trace",
-        "scope": "thread",
-        "resourceUri": "ui://sentry/trace.html"
-      }
-    ],
-    "commands": [
-      {
-        "id": "sentry-open-trace",
-        "title": "Sentry: Open traces for this thread",
-        "panel": "sentry-trace"
-      }
-    ]
+    "panels": [],
+    "commands": []
   },
   "t3Tools": []
 }
