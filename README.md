@@ -2,7 +2,7 @@
 
 Install this directory in T3 Code, then open **Settings → Tools → Sentry → Sign in**. Select **Inspect Issues & Events** for read-only access. Each T3 environment stores its own Sentry grant. T3 connects to Sentry's hosted MCP endpoint over HTTP. [Sentry MCP](https://mcp.sentry.dev/)
 
-Use `search_events` to find spans tagged with a T3 thread ID and `get_trace_details` to inspect a trace. The hosted server controls which tools and inline views the grant can use.
+Use `search_traces` to find spans tagged with a T3 thread ID and `get_trace_details` to inspect a trace. The hosted server controls which tools and inline views the grant can use.
 
 ## Stdio operator tools
 
