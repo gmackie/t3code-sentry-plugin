@@ -1,31 +1,26 @@
 # T3 Code Sentry monitoring plugin
 
-An MCP server that reads agent-monitoring traces back from Sentry, for agents and for a T3 Code thread panel.
+Install this directory in T3 Code, then open **Settings → Tools → Sentry → Sign in**. Select **Inspect Issues & Events** for read-only access. Each T3 environment stores its own Sentry grant. T3 connects to Sentry's hosted MCP endpoint over HTTP. [Sentry MCP](https://mcp.sentry.dev/)
 
-- **Thread panel "Sentry trace"**: lists the Sentry traces whose spans are tagged with the current thread (`t3_thread_id`), with operation and error counts. Open a trace to see each operation's status, duration and run id.
-- **Tools for agents**: `sentry_thread_traces` (traces for a thread id) and `sentry_trace` (one trace by id). Both render the same view inline.
+Use `search_events` to find spans tagged with a T3 thread ID and `get_trace_details` to inspect a trace. The hosted server controls which tools and inline views the grant can use.
 
-Only span ids, operations, statuses, timestamps and the `t3_thread_id`/`t3_run_id` tags are requested from Sentry. Raw payloads and other tags never reach T3.
+## Stdio operator tools
 
-The plugin does not send telemetry. Spans reach Sentry from whatever produces them (T3's Sentry agent monitoring, upstream PR #5376, or a provider SDK). See [docs/manifest-v2.md](docs/manifest-v2.md) for why the v1 hooks were removed.
+The standalone server exposes `sentry_thread_traces`, `sentry_trace`, and their `ui://sentry/trace.html` view. It reads the spans emitted by T3 agent monitoring or a provider SDK and returns span IDs, operations, statuses, timestamps, and T3 thread and run tags.
 
-## Install
+Set `SENTRY_ORG` to the organization slug and `SENTRY_AUTH_TOKEN` to an operator token with `org:read` and `event:read`. Set `SENTRY_URL` for a regional or self-hosted instance. Run the server or Inspector from this checkout.
 
-Run `bun install --frozen-lockfile`, then install this directory through T3's plugin installer and fill in its variables on the connected server. Web, desktop and mobile can open the panel; mobile uses the server installation.
-
-| Variable | Value |
-|---|---|
-| `SENTRY_URL` | `https://sentry.io` (default), a regional host such as `https://us.sentry.io`, or your self-hosted Sentry |
-| `SENTRY_ORG` | Organization slug |
-| `SENTRY_AUTH_TOKEN` | Auth token with `org:read` and `event:read` (stored as a secret) |
-
-Without a token and organization the server still starts, and every tool says which setting is missing.
+```sh
+bun install --frozen-lockfile
+bun run mcp
+# Or launch MCP Inspector
+bun run inspect
+```
 
 ## Develop
 
 ```sh
-bun install
+bun install --frozen-lockfile
 bun test
 bun run typecheck
-SENTRY_ORG=acme SENTRY_AUTH_TOKEN=... bun run inspect   # MCP Inspector
 ```
